@@ -1,0 +1,38 @@
+name: Reusable Snyk SCA Scan
+
+on:
+  workflow_call:
+    secrets:
+      SNYK_TOKEN:
+        required: true
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Snyk
+        run: npm install -g snyk
+
+      - name: Install Snyk Filter
+        run: npm install -g snyk-filter
+
+      - name: Authenticate Snyk
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+
+      - name: Run Snyk Scan
+        run: |
+          snyk test --all-projects \
+          --json-file-output=opensource-results.json || true
+
+      - name: Apply Filter
+        run: |
+          snyk-filter \
+          -i opensource-results.json \
+          -f .snyk-filter/high-poc.yml
