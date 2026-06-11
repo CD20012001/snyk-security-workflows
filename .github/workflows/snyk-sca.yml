@@ -31,6 +31,45 @@ jobs:
           snyk test --all-projects \
           --json-file-output=opensource-results.json || true
 
+      - name: Create Filter
+        run: |
+         mkdir -p .snyk-filter
+
+         cat > .snyk-filter/filter-poc.yml << 'EOF'
+         version: 2
+
+         customFilters:
+          filter: >
+          .vulnerabilities |= map(
+           if (
+            (.severity == "high" or .severity == "critical")
+            and
+            (
+              .exploit == "Proof of Concept"
+              or
+              .exploit == "Mature"
+            )
+          )
+          then .
+          else empty
+          end
+         )
+
+    pass: >
+        [.vulnerabilities[]
+          | select(
+              (.severity == "high" or .severity == "critical")
+              and
+              (
+                .exploit == "Proof of Concept"
+                or
+                .exploit == "Mature"
+              )
+            )
+        ] | length
+
+    msg: "High/Critical vulnerability with Mature or PoC exploit detected" 
+    
       - name: Apply Filter
         run: |
           snyk-filter \
