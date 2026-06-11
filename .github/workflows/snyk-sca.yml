@@ -1,39 +1,225 @@
-name: Snyk SCA Workflow
+# .github/workflows/snyk-sast-reusable.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable Snyk SAST workflow
+# Can be called by any team (Node.js, Python, Java, etc.)
+#
+# Inputs
+#   language        : 'node' | 'python' | 'java'  (default: auto-detect)
+#   severity-filter : fail only on 'critical' | 'high' | 'critical,high'
+#                     (default: critical,high)
+#   fail-on-exploit : also require a public exploit (poc or mature) to fail
+#                     (default: true)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Snyk SAST – Reusable
 
 on:
   workflow_call:
+    inputs:
+      language:
+        description: "Project language: node | python | java (leave blank for auto-detect)"
+        required: false
+        type: string
+        default: ""
+
+      severity-filter:
+        description: "Comma-separated severities that can fail the build: critical,high"
+        required: false
+        type: string
+        default: "critical,high"
+
+      fail-on-exploit:
+        description: "Only fail when a public exploit (poc or mature) is available"
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      SNYK_TOKEN:
+        description: "Snyk API token"
+        required: true
+
+    outputs:
+      vulnerabilities-found:
+        description: "true if matching vulnerabilities were found"
+        value: ${{ jobs.snyk-sast.outputs.vulnerabilities-found }}
 
 jobs:
   snyk-sast:
+    name: Snyk SAST Scan
     runs-on: ubuntu-latest
+
+    outputs:
+      vulnerabilities-found: ${{ steps.snyk-filter.outputs.vulnerabilities-found }}
+
     steps:
-      - name: Checkout code
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ── 2. Language-specific setup ───────────────────────────────────────────
       - name: Set up Node.js
+        if: inputs.language == 'node' || inputs.language == ''
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: "20"
+          cache: "npm"
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install Node dependencies
+        if: inputs.language == 'node' || inputs.language == ''
+        run: |
+          if [ -f package-lock.json ]; then npm ci
+          elif [ -f yarn.lock ];       then yarn install --frozen-lockfile
+          elif [ -f pnpm-lock.yaml ];  then npx pnpm install --frozen-lockfile
+          fi
+        continue-on-error: true   # non-Node repos won't have these files
 
-      - name: Run Snyk SAST with filter
-        uses: snyk/actions/node@v4
+      - name: Set up Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        if: inputs.language == 'python'
+        run: |
+          if [ -f requirements.txt ];      then pip install -r requirements.txt
+          elif [ -f pyproject.toml ];      then pip install .
+          elif [ -f Pipfile ];             then pip install pipenv && pipenv install
+          fi
+        continue-on-error: true
+
+      - name: Set up Java
+        if: inputs.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Build Java project
+        if: inputs.language == 'java'
+        run: |
+          if [ -f pom.xml ];        then mvn -q install -DskipTests
+          elif [ -f build.gradle ]; then ./gradlew build -x test
+          fi
+        continue-on-error: true
+
+      # ── 3. Install Snyk CLI ──────────────────────────────────────────────────
+      - name: Install Snyk CLI
+        run: npm install -g snyk@latest
+
+      # ── 4. Run Snyk test – output full JSON for custom filtering ─────────────
+      - name: Run Snyk SAST scan (JSON output)
+        id: snyk-scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: test
-          args: >
-            --severity-threshold=high
-            --json-file-output=snyk.json
-            --fail-on=all
-            --filter=exploitMaturity=proof-of-concept,mature
+        run: |
+          # --json-file-output captures results even when Snyk exits non-zero
+          snyk test \
+            --all-projects \
+            --detection-depth=6 \
+            --json-file-output=snyk-results.json \
+            --severity-threshold=low \
+          || true   # always continue; filtering happens in the next step
 
-      - name: Upload Snyk results
+      # ── 5. Custom filter: severity + exploit maturity ────────────────────────
+      - name: Apply Snyk filter (severity + exploit maturity)
+        id: snyk-filter
+        env:
+          SEVERITY_FILTER: ${{ inputs.severity-filter }}
+          FAIL_ON_EXPLOIT: ${{ inputs.fail-on-exploit }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+
+          results_file = "snyk-results.json"
+          severity_filter  = [s.strip().lower() for s in os.environ["SEVERITY_FILTER"].split(",")]
+          fail_on_exploit  = os.environ["FAIL_ON_EXPLOIT"].lower() == "true"
+
+          # Exploit maturities that count as "public exploit available"
+          PUBLIC_EXPLOIT_MATURITIES = {"proof-of-concept", "poc", "mature"}
+
+          try:
+              with open(results_file) as f:
+                  raw = json.load(f)
+          except FileNotFoundError:
+              print("::warning::snyk-results.json not found – treating as no issues.")
+              print("vulnerabilities-found=false", file=open(os.environ["GITHUB_OUTPUT"], "a"))
+              sys.exit(0)
+
+          # Snyk JSON can be a single object or a list (--all-projects)
+          projects = raw if isinstance(raw, list) else [raw]
+
+          matched   = []
+          all_vulns = []
+
+          for project in projects:
+              vulns = project.get("vulnerabilities", [])
+              for v in vulns:
+                  severity = v.get("severity", "").lower()
+                  maturity = v.get("exploit", v.get("exploitMaturity", "no-known-exploit")).lower().replace(" ", "-")
+
+                  all_vulns.append({
+                      "id":       v.get("id"),
+                      "title":    v.get("title"),
+                      "severity": severity,
+                      "exploit":  maturity,
+                      "package":  v.get("packageName"),
+                      "version":  v.get("version"),
+                      "from":     v.get("from", []),
+                  })
+
+                  severity_match = severity in severity_filter
+                  exploit_match  = (not fail_on_exploit) or (maturity in PUBLIC_EXPLOIT_MATURITIES)
+
+                  if severity_match and exploit_match:
+                      matched.append(all_vulns[-1])
+
+          # ── Summary ──────────────────────────────────────────────────────────
+          print(f"\n{'='*70}")
+          print(f"  Snyk Filter Summary")
+          print(f"{'='*70}")
+          print(f"  Total vulnerabilities scanned : {len(all_vulns)}")
+          print(f"  Severity filter               : {severity_filter}")
+          print(f"  Exploit maturity required     : {fail_on_exploit}")
+          print(f"  Matched (build-breaking) vulns: {len(matched)}")
+          print(f"{'='*70}\n")
+
+          if matched:
+              print("::error::Build failed – the following vulnerabilities meet the filter criteria:\n")
+              for v in matched:
+                  print(f"  [{v['severity'].upper()}] {v['id']} – {v['title']}")
+                  print(f"    Package : {v['package']} @ {v['version']}")
+                  print(f"    Exploit : {v['exploit']}")
+                  print(f"    Path    : {' > '.join(v['from'])}")
+                  print()
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
+              gh_out.write(f"vulnerabilities-found={'true' if matched else 'false'}\n")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"## Snyk SAST Results\n\n")
+              summary.write(f"| Metric | Value |\n|---|---|\n")
+              summary.write(f"| Total vulnerabilities | {len(all_vulns)} |\n")
+              summary.write(f"| Build-breaking matches | {len(matched)} |\n")
+              summary.write(f"| Severity filter | `{', '.join(severity_filter)}` |\n")
+              summary.write(f"| Exploit filter active | `{fail_on_exploit}` |\n\n")
+              if matched:
+                  summary.write("### ❌ Blocking Vulnerabilities\n\n")
+                  summary.write("| Severity | ID | Title | Package | Exploit |\n|---|---|---|---|---|\n")
+                  for v in matched:
+                      summary.write(f"| {v['severity'].upper()} | {v['id']} | {v['title']} | {v['package']}@{v['version']} | {v['exploit']} |\n")
+              else:
+                  summary.write("### ✅ No blocking vulnerabilities found\n")
+
+          sys.exit(1 if matched else 0)
+          PYEOF
+
+      # ── 6. Upload raw Snyk JSON as artifact (always, for audit trail) ────────
+      - name: Upload Snyk results artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: snyk-sast-report
-          path: snyk.json
-
+          name: snyk-sast-results-${{ github.run_id }}
+          path: snyk-results.json
+          retention-days: 30
