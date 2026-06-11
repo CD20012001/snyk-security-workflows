@@ -26,7 +26,7 @@ jobs:
           command: test
           args: >
             --severity-threshold=high
-            --json
+            --json-file-output=snyk.json
             --fail-on=all
             --filter=exploitMaturity=proof-of-concept,mature
 
@@ -36,3 +36,4 @@ jobs:
         with:
           name: snyk-sast-report
           path: snyk.json
+
