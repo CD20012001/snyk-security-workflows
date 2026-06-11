@@ -1,10 +1,7 @@
-name: Snyk SAST Scan
+name: Snyk SCA Workflow
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  workflow_call:
 
 jobs:
   snyk-sast:
