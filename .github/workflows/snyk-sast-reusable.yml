@@ -63,14 +63,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
+          # cache: "npm" intentionally omitted – requires a lockfile to work
 
       - name: Install Node dependencies
         if: inputs.language == 'node' || inputs.language == ''
         run: |
-          if [ -f package-lock.json ]; then npm ci
-          elif [ -f yarn.lock ];       then yarn install --frozen-lockfile
-          elif [ -f pnpm-lock.yaml ];  then npx pnpm install --frozen-lockfile
+          if [ -f package-lock.json ];  then npm ci
+          elif [ -f yarn.lock ];        then yarn install --frozen-lockfile
+          elif [ -f pnpm-lock.yaml ];   then npx pnpm install --frozen-lockfile
+          elif [ -f package.json ];     then npm install   # no lockfile – common in many teams
           fi
         continue-on-error: true   # non-Node repos won't have these files
 
