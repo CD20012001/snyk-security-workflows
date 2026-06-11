@@ -11,11 +11,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Install Snyk
         run: npm install -g snyk
@@ -26,52 +23,52 @@ jobs:
       - name: Authenticate Snyk
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
-      - name: Run Snyk Scan
-        run: |
-          snyk test --all-projects \
-          --json-file-output=opensource-results.json || true
-
       - name: Create Filter
         run: |
-         mkdir -p .snyk-filter
+          mkdir -p .snyk-filter
 
-         cat > .snyk-filter/filter-poc.yml << 'EOF'
-         version: 2
+          cat > .snyk-filter/filter-poc.yml << 'EOF'
+          version: 2
 
-         customFilters:
-          filter: >
-          .vulnerabilities |= map(
-           if (
-            (.severity == "high" or .severity == "critical")
-            and
-            (
-              .exploit == "Proof of Concept"
-              or
-              .exploit == "Mature"
-            )
-          )
-          then .
-          else empty
-          end
-         )
-
-    pass: >
-        [.vulnerabilities[]
-          | select(
-              (.severity == "high" or .severity == "critical")
-              and
-              (
-                .exploit == "Proof of Concept"
-                or
-                .exploit == "Mature"
+          customFilters:
+            filter: >
+              .vulnerabilities |= map(
+                if (
+                  (.severity == "high" or .severity == "critical")
+                  and
+                  (
+                    .exploit == "Proof of Concept"
+                    or
+                    .exploit == "Mature"
+                  )
+                )
+                then .
+                else empty
+                end
               )
-            )
-        ] | length
 
-    msg: "High/Critical vulnerability with Mature or PoC exploit detected" 
-    
+            pass: >
+              [.vulnerabilities[]
+                | select(
+                    (.severity == "high" or .severity == "critical")
+                    and
+                    (
+                      .exploit == "Proof of Concept"
+                      or
+                      .exploit == "Mature"
+                    )
+                  )
+              ] | length
+
+            msg: "High/Critical vulnerability with Mature or PoC exploit detected"
+          EOF
+
+      - name: Run Snyk Scan
+        run: |
+          snyk test --all-projects --json > opensource-results.json || true
+
       - name: Apply Filter
         run: |
           snyk-filter \
-          -i opensource-results.json \
-          -f .snyk-filter/filter-poc.yml
+            -i opensource-results.json \
+            -f .snyk-filter/filter-poc.yml
