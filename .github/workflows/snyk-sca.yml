@@ -63,23 +63,9 @@ jobs:
             msg: "High/Critical vulnerability with Mature or PoC exploit detected"
           EOF
 
-      - name: Install Dependencies
-        run: |
-         if [ -f package.json ]; then
-          npm install
-         fi
-         
       - name: Run Snyk Scan
         run: |
           snyk test --all-projects --json > opensource-results.json || true
-
-      - name: Show Exploit Values
-        run: |
-          cat opensource-results.json | jq '.vulnerabilities[] | {
-           title,
-           severity,
-           exploit
-          }'
 
       - name: Apply Filter
         run: |
