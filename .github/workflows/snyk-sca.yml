@@ -70,12 +70,12 @@ jobs:
       - name: Show Maturity Levels
         run: |
          cat opensource-results.json | jq '
-          .vulnerabilities[] |
-          {
-            title,
-            severity,
-            exploit,
-            maturity: .exploitDetails.maturityLevels
+         .vulnerabilities[] |
+         {
+           title,
+           severity,
+           exploit,
+           maturity: (.exploitDetails.maturityLevels // [])
          }'
          
       - name: Dump Full First Vulnerability
