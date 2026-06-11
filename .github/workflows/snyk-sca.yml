@@ -35,4 +35,4 @@ jobs:
         run: |
           snyk-filter \
           -i opensource-results.json \
-          -f .snyk-filter/high-poc.yml
+          -f .snyk-filter/filter-poc.yml
