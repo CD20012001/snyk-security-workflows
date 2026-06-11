@@ -67,6 +67,17 @@ jobs:
         run: |
           snyk test --all-projects --json > opensource-results.json || true
 
+      - name: Show Maturity Levels
+        run: |
+         cat opensource-results.json | jq '
+          .vulnerabilities[] |
+          {
+            title,
+            severity,
+            exploit,
+            maturity: .exploitDetails.maturityLevels
+         }'
+         
       - name: Dump Full First Vulnerability
         run: |
          cat opensource-results.json | jq '.vulnerabilities[0]'
