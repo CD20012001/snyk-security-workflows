@@ -67,6 +67,10 @@ jobs:
         run: |
           snyk test --all-projects --json > opensource-results.json || true
 
+      - name: Debug Snyk Output
+        run: |
+          cat opensource-results.json
+
       - name: Apply Filter
         run: |
           snyk-filter \
