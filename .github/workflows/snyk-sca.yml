@@ -67,14 +67,13 @@ jobs:
         run: |
           snyk test --all-projects --json > opensource-results.json || true
 
-      - name: Show Vulnerability Summary
+      - name: Search For Maturity Fields
         run: |
-         cat opensource-results.json | jq '.vulnerabilities[] | {
-          title,
-          severity,
-          exploit,
-          packageName
-         }'
+         cat opensource-results.json | grep -i mature
+
+      - name: Search For Exploit Fields
+        run: |
+         cat opensource-results.json | grep -i exploit
          
       - name: Apply Filter
         run: |
