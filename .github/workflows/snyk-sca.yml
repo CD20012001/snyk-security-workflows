@@ -67,13 +67,9 @@ jobs:
         run: |
           snyk test --all-projects --json > opensource-results.json || true
 
-      - name: Search For Maturity Fields
+      - name: Dump Full First Vulnerability
         run: |
-         cat opensource-results.json | grep -i mature
-
-      - name: Search For Exploit Fields
-        run: |
-         cat opensource-results.json | grep -i exploit
+         cat opensource-results.json | jq '.vulnerabilities[0]'
          
       - name: Apply Filter
         run: |
