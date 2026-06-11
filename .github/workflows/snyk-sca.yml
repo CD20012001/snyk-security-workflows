@@ -73,9 +73,13 @@ jobs:
         run: |
           snyk test --all-projects --json > opensource-results.json || true
 
-      - name: Debug Snyk Output
+      - name: Show Exploit Values
         run: |
-          cat opensource-results.json
+          cat opensource-results.json | jq '.vulnerabilities[] | {
+           title,
+           severity,
+           exploit
+          }'
 
       - name: Apply Filter
         run: |
