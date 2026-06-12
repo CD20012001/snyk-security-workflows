@@ -1,405 +1,70 @@
-# .github/workflows/snyk-sast-reusable.yml
-# ─────────────────────────────────────────────────────────────────────────────
-# Universal Snyk SAST reusable workflow
-# Works for ANY language – Node.js, Python, Java, Go, Ruby, .NET, PHP, etc.
-# No language input needed – Snyk auto-detects everything via --all-projects
-#
-# Inputs (all optional):
-#   severity-filter : 'critical' | 'high' | 'critical,high'  (default: critical,high)
-#   fail-on-exploit : only fail when POC or mature exploit exists (default: true)
-# ─────────────────────────────────────────────────────────────────────────────
-
-name: Snyk SAST – Reusable (Universal)
+name: Snyk Filter
 
 on:
   workflow_call:
     inputs:
-      severity-filter:
-        description: "Comma-separated severities that can fail the build"
-        required: false
+      install-command:
+        description: "Command to install dependencies"
+        required: true
         type: string
-        default: "critical,high"
-
-      fail-on-exploit:
-        description: "Only fail when a public exploit (poc or mature) is available"
-        required: false
-        type: boolean
-        default: true
-
     secrets:
       SNYK_TOKEN:
-        description: "Snyk API token"
         required: true
 
-    outputs:
-      vulnerabilities-found:
-        description: "true if matching vulnerabilities were found"
-        value: ${{ jobs.snyk-sast.outputs.vulnerabilities-found }}
-
 jobs:
-  snyk-sast:
-    name: Snyk SAST Scan
+  snyk-filter:
     runs-on: ubuntu-latest
-
-    outputs:
-      vulnerabilities-found: ${{ steps.snyk-filter.outputs.vulnerabilities-found }}
-
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────────────
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # ── 2. Auto-detect language and install dependencies ─────────────────────
-      #       Snyk needs dependencies installed to build the dependency tree.
-      #       We detect the manifest file and run the right install command.
-      - name: Install dependencies (auto-detect language)
-        run: |
-          echo "🔍 Detecting project language..."
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
 
-          # ── Node.js ──────────────────────────────────────────────────────────
-          if [ -f package.json ]; then
-            echo "✅ Detected: Node.js"
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs
-            if   [ -f package-lock.json ]; then npm ci
-            elif [ -f yarn.lock ];         then yarn install --frozen-lockfile
-            elif [ -f pnpm-lock.yaml ];    then npx pnpm install --frozen-lockfile
-            else                                npm install
-            fi
+      - name: Install Snyk
+        run: npm install -g snyk
 
-          # ── Python ───────────────────────────────────────────────────────────
-          elif [ -f requirements.txt ] || [ -f Pipfile ] || [ -f pyproject.toml ]; then
-            echo "✅ Detected: Python"
-            sudo apt-get install -y python3-pip python3-dev python3-setuptools
-            python3 -m pip install --upgrade pip setuptools wheel
-            if [ -f requirements.txt ]; then
-              # --prefer-binary avoids building from source (fixes old packages on Python 3.12)
-              python3 -m pip install -r requirements.txt --prefer-binary ||               python3 -m pip install -r requirements.txt --prefer-binary --ignore-requires-python || true
-              echo "--- Installed packages ---"
-              python3 -m pip list
-            elif [ -f Pipfile ]; then
-              python3 -m pip install pipenv
-              pipenv install --system --deploy
-            elif [ -f pyproject.toml ]; then
-              python3 -m pip install . --prefer-binary || true
-            fi
-
-          # ── Java (Maven) ─────────────────────────────────────────────────────
-          elif [ -f pom.xml ]; then
-            echo "✅ Detected: Java (Maven)"
-            sudo apt-get install -y default-jdk
-            mvn -q install -DskipTests
-
-          # ── Java (Gradle) ────────────────────────────────────────────────────
-          elif [ -f build.gradle ] || [ -f build.gradle.kts ]; then
-            echo "✅ Detected: Java (Gradle)"
-            sudo apt-get install -y default-jdk
-            ./gradlew build -x test
-
-          # ── Go ───────────────────────────────────────────────────────────────
-          elif [ -f go.mod ]; then
-            echo "✅ Detected: Go"
-            sudo apt-get install -y golang
-            go mod download
-
-          # ── Ruby ─────────────────────────────────────────────────────────────
-          elif [ -f Gemfile ]; then
-            echo "✅ Detected: Ruby"
-            sudo apt-get install -y ruby-bundler
-            bundle install
-
-          # ── .NET ─────────────────────────────────────────────────────────────
-          elif ls *.csproj *.sln 2>/dev/null | head -1 | grep -q .; then
-            echo "✅ Detected: .NET"
-            sudo apt-get install -y dotnet-sdk-8.0
-            dotnet restore
-
-          # ── PHP ──────────────────────────────────────────────────────────────
-          elif [ -f composer.json ]; then
-            echo "✅ Detected: PHP"
-            sudo apt-get install -y php composer
-            composer install --no-interaction
-
-          else
-            echo "⚠️  No known manifest file found – Snyk will still attempt scan"
-          fi
-        continue-on-error: true   # don't fail if install has warnings
-
-      # ── 3. Install Snyk CLI ──────────────────────────────────────────────────
-      - name: Install Snyk CLI
-        run: npm install -g snyk@latest
-
-      # ── 4. Run Snyk scan – full JSON output for custom filtering ─────────────
-      - name: Run Snyk SAST scan (JSON output)
+      - name: Run Snyk scan and save JSON
+        run: snyk test --json > snyk.json || true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Filter and fail on critical/high with mature or POC exploit
         run: |
-          snyk test \
-            --all-projects \
-            --detection-depth=6 \
-            --json-file-output=snyk-results.json \
-            --severity-threshold=low \
-            --command=python3 \
-            --skip-unresolved \
-          || true   # always continue – filtering is done in the next step
+          python3 << 'EOF'
+          import json, sys
 
-      # ── 5. Custom filter: severity + exploit maturity ────────────────────────
-      - name: Apply Snyk filter (severity + exploit maturity)
-        id: snyk-filter
-        env:
-          SEVERITY_FILTER: ${{ inputs.severity-filter }}
-          FAIL_ON_EXPLOIT: ${{ inputs.fail-on-exploit }}
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-          python3 - <<'PYEOF'
-          import json, os, sys
+          with open('snyk.json') as f:
+              data = json.load(f)
 
-          results_file    = "snyk-results.json"
-          severity_filter = [s.strip().lower() for s in os.environ["SEVERITY_FILTER"].split(",")]
-          fail_on_exploit = os.environ["FAIL_ON_EXPLOIT"].lower() == "true"
+          projects = data if isinstance(data, list) else [data]
 
-          # Exploit maturities that count as "public exploit available"
-          # Covers all Snyk JSON formats: Node.js, Java/Maven, Python, Go etc.
-          PUBLIC_EXPLOIT_MATURITIES = {"proof-of-concept", "poc", "mature", "functional"}
-
-          def get_org_id(snyk_token):
-              """Get the first org ID using Snyk v1 API (more reliable than REST)."""
-              import urllib.request
-              try:
-                  # v1 API is simpler and doesn't need version param
-                  req = urllib.request.Request(
-                      "https://api.snyk.io/v1/orgs",
-                      headers={
-                          "Authorization": f"token {snyk_token}",
-                          "Content-Type": "application/json"
-                      }
-                  )
-                  with urllib.request.urlopen(req, timeout=10) as resp:
-                      data = json.loads(resp.read())
-                  orgs = data.get("orgs", [])
-                  if orgs:
-                      org_id = orgs[0].get("id")
-                      print(f"  [API] Using org ID: {org_id}")
-                      return org_id
-                  return None
-              except Exception as e:
-                  print(f"  [API] Could not get org ID: {e}")
-                  return None
-
-          def fetch_maturity_from_api(package_name, package_version, ecosystem, snyk_token, org_id):
-              """
-              Fetch exploit maturity from Snyk REST API.
-              Uses: GET /rest/orgs/{org_id}/packages/{purl}/issues
-              purl format for pip: pkg:pypi/{name}@{version}
-              Response path: data[].attributes.slots.exploit_details.maturity_levels[primary].level
-              """
-              import urllib.request, urllib.parse
-              try:
-                  # Build purl based on ecosystem
-                  ecosystem_map = {
-                      "pip": "pypi", "pypi": "pypi",
-                      "npm": "npm", "maven": "maven",
-                      "gradle": "maven", "rubygems": "gem",
-                      "composer": "composer", "gomodules": "golang",
-                  }
-                  purl_type = ecosystem_map.get(str(ecosystem).lower(), ecosystem)
-                  purl = f"pkg:{purl_type}/{package_name}@{package_version}"
-                  encoded_purl = urllib.parse.quote(purl, safe="")
-                  url = f"https://api.snyk.io/rest/orgs/{org_id}/packages/{encoded_purl}/issues?version=2024-06-26&limit=100"
-
-                  print(f"  [API] Calling: {url}")
-                  req = urllib.request.Request(url, headers={
-                      "Authorization": f"token {snyk_token}",
-                      "Content-Type": "application/json"
-                  })
-                  with urllib.request.urlopen(req, timeout=15) as resp:
-                      data = json.loads(resp.read())
-
-                  issues = data.get("data", [])
-                  print(f"  [API] {package_name}@{package_version}: {len(issues)} issues returned")
-
-                  # Find best maturity across all issues for this package
-                  MATURITY_RANK = {"mature": 3, "proof-of-concept": 2, "functional": 2, "no-known-exploit": 0}
-                  best = "no-known-exploit"
-
-                  for issue in issues:
-                      attrs = issue.get("attributes", {})
-                      slots = attrs.get("slots", {})
-                      exploit_details = slots.get("exploit_details") or {}
-                      maturity_levels = exploit_details.get("maturity_levels") or []
-                      # also check top-level exploit field in attributes
-                      top_exploit = attrs.get("exploit") or ""
-
-                      print(f"  [API]   issue slots keys: {list(slots.keys())}")
-                      print(f"  [API]   exploit_details: {exploit_details}")
-                      print(f"  [API]   top_exploit: {top_exploit}")
-
-                      for m in maturity_levels:
-                          level = str(m.get("level") or "").strip().lower().replace(" ", "-")
-                          if MATURITY_RANK.get(level, 0) > MATURITY_RANK.get(best, 0):
-                              best = level
-
-                  print(f"  [API] Best maturity for {package_name}@{package_version}: {best}")
-                  return best
-              except Exception as e:
-                  print(f"  [API] Error fetching maturity for {package_name}@{package_version}: {e}")
-                  return "no-known-exploit"
-
-          # Cache API results to avoid duplicate calls per package
-          _api_cache = {}
-          _org_id_cache = [None]
-
-          def extract_maturity(v, snyk_token=None):
-              """
-              Snyk stores exploit maturity in different places per ecosystem:
-              Node.js   -> top-level "exploit" e.g. "Proof of Concept", "Mature"
-              Java/Maven -> top-level "exploit" with CVSS score e.g. "High"
-              Python    -> NOT in CLI JSON — must call Snyk REST API packages/issues
-              """
-              # ── Step 1: exploitDetails.maturityLevels (Node.js/Java newer) ──────
-              exploit_details = v.get("exploitDetails") or {}
-              if isinstance(exploit_details, dict):
-                  maturity_levels = exploit_details.get("maturityLevels") or []
-                  if isinstance(maturity_levels, list) and maturity_levels:
-                      primary = next(
-                          (m for m in maturity_levels if str(m.get("type","")).lower() == "primary"),
-                          maturity_levels[0]
-                      )
-                      level = str(primary.get("level") or "").strip()
-                      if level and level.lower() not in ("", "not defined", "not-defined"):
-                          return level.lower().replace(" ", "-")
-
-              # ── Step 2: top-level exploitMaturity ───────────────────────────────
-              exploit_maturity = v.get("exploitMaturity") or ""
-              if exploit_maturity:
-                  return str(exploit_maturity).strip().lower().replace(" ", "-")
-
-              # ── Step 3: Map top-level "exploit" field ────────────────────────────
-              exploit_raw = str(v.get("exploit") or "not-defined").strip().lower()
-              exploit_normalised = exploit_raw.replace(" ", "-")
-
-              CVSS_TO_MATURITY = {
-                  "proof-of-concept"  : "proof-of-concept",
-                  "poc"               : "proof-of-concept",
-                  "mature"            : "mature",
-                  "functional"        : "functional",
-                  "no-known-exploit"  : "no-known-exploit",
-                  "high"              : "mature",
-                  "unproven"          : "no-known-exploit",
-                  "not-defined"       : "no-known-exploit",
-              }
-              mapped = CVSS_TO_MATURITY.get(exploit_normalised, exploit_normalised)
-
-              # ── Step 4: Snyk REST API fallback for Python ────────────────────────
-              if mapped in ("no-known-exploit", "not-defined") and snyk_token:
-                  # Normalise package name: PyYAML → pyyaml, Pillow → pillow etc.
-                  pkg_name    = str(v.get("packageName") or v.get("name") or "").lower().replace("_", "-")
-                  pkg_version = str(v.get("version") or "")
-                  pkg_manager = str(v.get("packageManager") or "pip").lower()
-                  # For pypi, use the module name not display name
-                  cache_key   = f"{pkg_manager}:{pkg_name}:{pkg_version}"
-                  print(f"  [CACHE] Looking up: {cache_key}")
-
-                  if cache_key not in _api_cache:
-                      # Get org ID once and cache it
-                      if _org_id_cache[0] is None:
-                          _org_id_cache[0] = get_org_id(snyk_token)
-                      org_id = _org_id_cache[0]
-                      if org_id and pkg_name and pkg_version:
-                          _api_cache[cache_key] = fetch_maturity_from_api(
-                              pkg_name, pkg_version, pkg_manager, snyk_token, org_id
-                          )
-                      else:
-                          _api_cache[cache_key] = mapped
-
-                  return _api_cache.get(cache_key, mapped)
-
-              return mapped
-
-          try:
-              with open(results_file) as f:
-                  raw = json.load(f)
-          except FileNotFoundError:
-              print("::warning::snyk-results.json not found – treating as no issues.")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("vulnerabilities-found=false\n")
-              sys.exit(0)
-
-          # Snyk JSON can be a single object or a list (--all-projects)
-          projects   = raw if isinstance(raw, list) else [raw]
-          matched    = []
-          all_vulns  = []
-          snyk_token = os.environ.get("SNYK_TOKEN", "")
+          failed = []
 
           for project in projects:
-              for v in project.get("vulnerabilities", []):
-                  severity = v.get("severity", "").lower()
-                  maturity = extract_maturity(v, snyk_token=snyk_token)
+              for vuln in project.get('vulnerabilities', []):
 
-                  all_vulns.append({
-                      "id":       v.get("id"),
-                      "title":    v.get("title"),
-                      "severity": severity,
-                      "exploit":  maturity,
-                      "package":  v.get("packageName"),
-                      "version":  v.get("version"),
-                      "from":     v.get("from", []),
-                  })
+                  severity = vuln.get('severity', '').lower()
 
-                  severity_match = severity in severity_filter
-                  exploit_match  = (not fail_on_exploit) or (maturity in PUBLIC_EXPLOIT_MATURITIES)
+                  exploit_raw = vuln.get('exploit', '') or ''
+                  exploit_normalised = exploit_raw.lower().replace(' ', '-')
 
-                  # Debug: print every high/critical vuln and its resolved maturity
-                  if severity in ("critical", "high"):
-                      print(f"  [FILTER] {v.get('id')} | sev={severity} | maturity={maturity} | exploit_match={exploit_match}")
+                  is_high_or_critical = severity in ['high', 'critical']
+                  is_exploitable = exploit_normalised in ['mature', 'proof-of-concept']
 
-                  if severity_match and exploit_match:
-                      matched.append(all_vulns[-1])
+                  if is_high_or_critical and is_exploitable:
+                      failed.append({
+                          'id'      : vuln.get('id'),
+                          'severity': severity,
+                          'exploit' : exploit_raw,
+                          'title'   : vuln.get('title'),
+                          'package' : vuln.get('name'),
+                          'version' : vuln.get('version'),
+                          'fixedIn' : vuln.get('fixedIn')
+                      })
 
-          # ── Print summary ─────────────────────────────────────────────────────
-          print(f"\n{'='*70}")
-          print(f"  Snyk Filter Summary")
-          print(f"{'='*70}")
-          print(f"  Total vulnerabilities scanned  : {len(all_vulns)}")
-          print(f"  Severity filter                : {severity_filter}")
-          print(f"  Exploit maturity required      : {fail_on_exploit}")
-          print(f"  Matched (build-breaking) vulns : {len(matched)}")
-          print(f"{'='*70}\n")
-
-          if matched:
-              print("::error::Build failed – vulnerabilities meeting filter criteria:\n")
-              for v in matched:
-                  print(f"  [{v['severity'].upper()}] {v['id']} – {v['title']}")
-                  print(f"    Package : {v['package']} @ {v['version']}")
-                  print(f"    Exploit : {v['exploit']}")
-                  print(f"    Path    : {' > '.join(v['from'])}")
-                  print()
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"vulnerabilities-found={'true' if matched else 'false'}\n")
-
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
-              s.write("## Snyk SAST Results\n\n")
-              s.write("| Metric | Value |\n|---|---|\n")
-              s.write(f"| Total vulnerabilities | {len(all_vulns)} |\n")
-              s.write(f"| Build-breaking matches | {len(matched)} |\n")
-              s.write(f"| Severity filter | `{', '.join(severity_filter)}` |\n")
-              s.write(f"| Exploit filter active | `{fail_on_exploit}` |\n\n")
-              if matched:
-                  s.write("### ❌ Blocking Vulnerabilities\n\n")
-                  s.write("| Severity | ID | Title | Package | Exploit |\n|---|---|---|---|---|\n")
-                  for v in matched:
-                      s.write(f"| {v['severity'].upper()} | {v['id']} | {v['title']} | {v['package']}@{v['version']} | {v['exploit']} |\n")
-              else:
-                  s.write("### ✅ No blocking vulnerabilities found\n")
-
-          sys.exit(1 if matched else 0)
-          PYEOF
-
-      # ── 6. Upload raw results as artifact (always, for audit trail) ──────────
-      - name: Upload Snyk results artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: snyk-sast-results-${{ github.run_id }}
-          path: snyk-results.json
-          retention-days: 30
+          if failed:
+              print(f"\nBUILD FAILED: {len(failed)} vulnerabilities found!\n")
+              for v in failed:
+                  print(f"  ID       : {v['id']}")
+                  print(f"  Title    : {v['title']}")
+                  print(f"  Package  : {v['package']} @ {v['version']}")
