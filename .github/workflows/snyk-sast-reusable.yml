@@ -142,61 +142,13 @@ jobs:
             --skip-unresolved \
           || true   # always continue – filtering is done in the next step
 
-      # ── 5. Debug – print raw JSON structure (remove after debugging) ───────────
-      - name: Debug – print raw Snyk JSON fields
-        if: always()
-        run: |
-          python3 - <<'DEBUGEOF'
-          import json, sys
-
-          try:
-              with open("snyk-results.json") as f:
-                  raw = json.load(f)
-          except Exception as e:
-              print(f"Could not read snyk-results.json: {e}")
-              sys.exit(0)
-
-          projects = raw if isinstance(raw, list) else [raw]
-          print(f"\n=== DEBUG: Snyk JSON Structure ===")
-          print(f"Total projects: {len(projects)}")
-          for i, project in enumerate(projects):
-              vulns = project.get("vulnerabilities", [])
-              print(f"\nProject {i+1}: {len(vulns)} vulnerabilities")
-              for v in vulns[:5]:  # print first 5 only
-                  print(f"  ---")
-                  print(f"  id            : {v.get('id')}")
-                  print(f"  severity      : {v.get('severity')}")
-                  print(f"  exploit       : {v.get('exploit')}")
-                  print(f"  exploitMaturity: {v.get('exploitMaturity')}")
-                  print(f"  metadata      : {v.get('metadata')}")
-                  # print ALL top-level keys so nothing is hidden
-                  print(f"  ALL KEYS      : {list(v.keys())}")
-                  # Show what our filter actually computes
-                  exploit_raw = str(v.get("exploit") or "not-defined").strip().lower()
-                  exploit_norm = exploit_raw.replace(" ", "-")
-                  print(f"  → computed maturity (normalised): '{exploit_norm}'")
-                  PUBLIC = {"proof-of-concept","poc","mature","functional"}
-                  print(f"  → in PUBLIC set?: {exploit_norm in PUBLIC}")
-                  # Print all potentially relevant fields in full
-                  print(f"  exploitDetails : {v.get('exploitDetails')}")
-                  print(f"  cvssDetails    : {v.get('cvssDetails')}")
-                  print(f"  insights       : {v.get('insights')}")
-                  print(f"  malicious      : {v.get('malicious')}")
-                  print(f"  semver         : {v.get('semver')}")
-                  # print severityWithCritical and severityBasedOn
-                  print(f"  severityBasedOn: {v.get('severityBasedOn')}")
-                  # Print first 300 chars of full vuln dict to catch anything missed
-                  import json as _json
-                  full = _json.dumps(v)
-                  print(f"  FULL JSON (first 500 chars): {full[:500]}")
-          DEBUGEOF
-
       # ── 5. Custom filter: severity + exploit maturity ────────────────────────
       - name: Apply Snyk filter (severity + exploit maturity)
         id: snyk-filter
         env:
           SEVERITY_FILTER: ${{ inputs.severity-filter }}
           FAIL_ON_EXPLOIT: ${{ inputs.fail-on-exploit }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           python3 - <<'PYEOF'
           import json, os, sys
@@ -209,28 +161,47 @@ jobs:
           # Covers all Snyk JSON formats: Node.js, Java/Maven, Python, Go etc.
           PUBLIC_EXPLOIT_MATURITIES = {"proof-of-concept", "poc", "mature", "functional"}
 
-          def extract_maturity(v):
+          def fetch_maturity_from_api(vuln_id, snyk_token):
+              """
+              Snyk CLI JSON does not include exploit maturity for Python packages.
+              We fetch it from the Snyk REST API using the vulnerability ID.
+              """
+              import urllib.request, urllib.error
+              try:
+                  url = f"https://api.snyk.io/rest/vulnerabilities/{vuln_id}?version=2023-11-27"
+                  req = urllib.request.Request(url, headers={
+                      "Authorization": f"token {snyk_token}",
+                      "Content-Type": "application/json"
+                  })
+                  with urllib.request.urlopen(req, timeout=10) as resp:
+                      data = json.loads(resp.read())
+                  # Extract maturity from REST API response
+                  attrs = data.get("data", {}).get("attributes", {})
+                  slots = attrs.get("slots", {})
+                  maturity = (
+                      slots.get("exploit")
+                      or attrs.get("exploit")
+                      or "no-known-exploit"
+                  )
+                  return str(maturity).strip().lower().replace(" ", "-")
+              except Exception:
+                  return "no-known-exploit"
+
+          # Cache API results to avoid duplicate calls
+          _api_cache = {}
+
+          def extract_maturity(v, snyk_token=None):
               """
               Snyk stores exploit maturity in different places per ecosystem:
-
-              Node.js   -> top-level "exploit" field
-                           e.g. "Proof of Concept", "Mature", "No Known Exploit"
-
-              Java/Maven -> top-level "exploit" field with CVSS score
-                           e.g. "High", "Not Defined", "Unproven"
-
-              Python    -> "exploitDetails.maturityLevels" list
-                           e.g. [{"type": "primary", "level": "Mature", "format": "CVSSv3"},
-                                  {"type": "secondary", "level": "Not Defined", "format": "CVSSv4"}]
-                           We read the "primary" entry's "level" field.
+              Node.js   -> top-level "exploit" e.g. "Proof of Concept", "Mature"
+              Java/Maven -> top-level "exploit" with CVSS score e.g. "High"
+              Python    -> NOT in CLI JSON at all — must call Snyk REST API
               """
-
-              # ── Step 1: Check exploitDetails.maturityLevels (Python / newer Snyk) ──
+              # ── Step 1: Check exploitDetails.maturityLevels ──────────────────────
               exploit_details = v.get("exploitDetails") or {}
               if isinstance(exploit_details, dict):
                   maturity_levels = exploit_details.get("maturityLevels") or []
                   if isinstance(maturity_levels, list) and maturity_levels:
-                      # Prefer "primary" type, fall back to first entry
                       primary = next(
                           (m for m in maturity_levels if str(m.get("type","")).lower() == "primary"),
                           maturity_levels[0]
@@ -239,29 +210,36 @@ jobs:
                       if level and level.lower() not in ("", "not defined", "not-defined"):
                           return level.lower().replace(" ", "-")
 
-              # ── Step 2: Check top-level exploitMaturity (some Snyk versions) ────────
+              # ── Step 2: Check top-level exploitMaturity ──────────────────────────
               exploit_maturity = v.get("exploitMaturity") or ""
               if exploit_maturity:
                   return str(exploit_maturity).strip().lower().replace(" ", "-")
 
-              # ── Step 3: Map top-level "exploit" field ────────────────────────────────
-              # Node.js returns maturity strings; Java returns CVSS exploit scores
+              # ── Step 3: Map top-level "exploit" field ────────────────────────────
               exploit_raw = str(v.get("exploit") or "not-defined").strip().lower()
               exploit_normalised = exploit_raw.replace(" ", "-")
 
               CVSS_TO_MATURITY = {
-                  # Node.js maturity strings (pass through as-is)
                   "proof-of-concept"  : "proof-of-concept",
                   "poc"               : "proof-of-concept",
                   "mature"            : "mature",
                   "functional"        : "functional",
                   "no-known-exploit"  : "no-known-exploit",
-                  # Java CVSS exploit score strings → map to maturity
                   "high"              : "mature",
                   "unproven"          : "no-known-exploit",
                   "not-defined"       : "no-known-exploit",
               }
-              return CVSS_TO_MATURITY.get(exploit_normalised, exploit_normalised)
+              mapped = CVSS_TO_MATURITY.get(exploit_normalised, exploit_normalised)
+
+              # ── Step 4: If still unresolved, call Snyk REST API ──────────────────
+              # Python CLI JSON never has maturity — API is the only source of truth
+              if mapped in ("no-known-exploit", "not-defined") and snyk_token:
+                  vuln_id = v.get("id", "")
+                  if vuln_id and vuln_id not in _api_cache:
+                      _api_cache[vuln_id] = fetch_maturity_from_api(vuln_id, snyk_token)
+                  return _api_cache.get(vuln_id, mapped)
+
+              return mapped
 
           try:
               with open(results_file) as f:
@@ -280,7 +258,8 @@ jobs:
           for project in projects:
               for v in project.get("vulnerabilities", []):
                   severity = v.get("severity", "").lower()
-                  maturity = extract_maturity(v)
+                  snyk_token = os.environ.get("SNYK_TOKEN", "")
+                  maturity = extract_maturity(v, snyk_token=snyk_token)
 
                   all_vulns.append({
                       "id":       v.get("id"),
