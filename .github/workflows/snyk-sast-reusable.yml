@@ -177,9 +177,18 @@ jobs:
                   print(f"  → computed maturity (normalised): '{exploit_norm}'")
                   PUBLIC = {"proof-of-concept","poc","mature","functional"}
                   print(f"  → in PUBLIC set?: {exploit_norm in PUBLIC}")
-                  # Print exploitDetails fully so we can see nested structure
-                  print(f"  exploitDetails (full): {v.get('exploitDetails')}")
-                  print(f"  epssDetails    (full): {v.get('epssDetails')}")
+                  # Print all potentially relevant fields in full
+                  print(f"  exploitDetails : {v.get('exploitDetails')}")
+                  print(f"  cvssDetails    : {v.get('cvssDetails')}")
+                  print(f"  insights       : {v.get('insights')}")
+                  print(f"  malicious      : {v.get('malicious')}")
+                  print(f"  semver         : {v.get('semver')}")
+                  # print severityWithCritical and severityBasedOn
+                  print(f"  severityBasedOn: {v.get('severityBasedOn')}")
+                  # Print first 300 chars of full vuln dict to catch anything missed
+                  import json as _json
+                  full = _json.dumps(v)
+                  print(f"  FULL JSON (first 500 chars): {full[:500]}")
           DEBUGEOF
 
       # ── 5. Custom filter: severity + exploit maturity ────────────────────────
