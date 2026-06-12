@@ -162,16 +162,25 @@ jobs:
           PUBLIC_EXPLOIT_MATURITIES = {"proof-of-concept", "poc", "mature", "functional"}
 
           def get_org_id(snyk_token):
-              """Get the first org ID associated with this Snyk token."""
+              """Get the first org ID using Snyk v1 API (more reliable than REST)."""
               import urllib.request
               try:
+                  # v1 API is simpler and doesn't need version param
                   req = urllib.request.Request(
-                      "https://api.snyk.io/rest/orgs?version=2024-06-26&limit=1",
-                      headers={"Authorization": f"token {snyk_token}"}
+                      "https://api.snyk.io/v1/orgs",
+                      headers={
+                          "Authorization": f"token {snyk_token}",
+                          "Content-Type": "application/json"
+                      }
                   )
                   with urllib.request.urlopen(req, timeout=10) as resp:
                       data = json.loads(resp.read())
-                  return data["data"][0]["id"]
+                  orgs = data.get("orgs", [])
+                  if orgs:
+                      org_id = orgs[0].get("id")
+                      print(f"  [API] Using org ID: {org_id}")
+                      return org_id
+                  return None
               except Exception as e:
                   print(f"  [API] Could not get org ID: {e}")
                   return None
