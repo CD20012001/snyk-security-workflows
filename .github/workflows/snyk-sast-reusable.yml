@@ -182,17 +182,54 @@ jobs:
           PUBLIC_EXPLOIT_MATURITIES = {"proof-of-concept", "poc", "mature", "functional"}
 
           def extract_maturity(v):
-              # Node.js  -> top-level "exploit"          e.g. "proof-of-concept"
-              # Java/Maven -> top-level "exploitMaturity" e.g. "Mature"
-              #            OR nested "metadata.exploitMaturity"
-              raw_val = (
-                  v.get("exploit")
-                  or v.get("exploitMaturity")
-                  or (v.get("metadata") or {}).get("exploitMaturity")
-                  or (v.get("metadata") or {}).get("exploit")
-                  or "no-known-exploit"
-              )
-              return str(raw_val).strip().lower().replace(" ", "-")
+              """
+              Snyk uses different fields per ecosystem:
+
+              Node.js  -> "exploit" field returns maturity string:
+                          "proof-of-concept", "mature", "no-known-exploit"
+
+              Java/Maven -> "exploit" field returns CVSS exploit score string:
+                            "High", "Not Defined", "Unproven" etc.
+                            Real maturity is in "exploitDetails" dict or
+                            we map the CVSS exploit score to maturity ourselves.
+
+              CVSS exploit score mapping:
+                "High"        -> treat as "mature"        (weaponised / widely exploited)
+                "Functional"  -> treat as "functional"    (working exploit exists)
+                "Proof-of-Concept" -> treat as "poc"      (POC exists)
+                "Unproven"    -> treat as "no-known-exploit"
+                "Not Defined" -> treat as "no-known-exploit"
+              """
+              # Check exploitDetails first (most accurate for Java)
+              exploit_details = v.get("exploitDetails") or {}
+              if isinstance(exploit_details, dict):
+                  maturity_from_details = (
+                      exploit_details.get("exploitMaturity")
+                      or exploit_details.get("maturity")
+                      or exploit_details.get("exploit")
+                  )
+                  if maturity_from_details:
+                      return str(maturity_from_details).strip().lower().replace(" ", "-")
+
+              # Check exploitMaturity top-level (some Snyk versions)
+              exploit_maturity = v.get("exploitMaturity")
+              if exploit_maturity:
+                  return str(exploit_maturity).strip().lower().replace(" ", "-")
+
+              # Fall back to "exploit" field — but map CVSS scores to maturity
+              exploit_raw = str(v.get("exploit") or "not-defined").strip().lower()
+
+              CVSS_TO_MATURITY = {
+                  "high"              : "mature",
+                  "functional"        : "functional",
+                  "proof-of-concept"  : "proof-of-concept",
+                  "poc"               : "proof-of-concept",
+                  "unproven"          : "no-known-exploit",
+                  "not defined"       : "no-known-exploit",
+                  "not-defined"       : "no-known-exploit",
+                  "no-known-exploit"  : "no-known-exploit",
+              }
+              return CVSS_TO_MATURITY.get(exploit_raw, exploit_raw)
 
           try:
               with open(results_file) as f:
