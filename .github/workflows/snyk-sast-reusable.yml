@@ -213,21 +213,31 @@ jobs:
                   with urllib.request.urlopen(req, timeout=15) as resp:
                       data = json.loads(resp.read())
 
+                  issues = data.get("data", [])
+                  print(f"  [API] {package_name}@{package_version}: {len(issues)} issues returned")
+
                   # Find best maturity across all issues for this package
                   MATURITY_RANK = {"mature": 3, "proof-of-concept": 2, "functional": 2, "no-known-exploit": 0}
                   best = "no-known-exploit"
 
-                  for issue in data.get("data", []):
+                  for issue in issues:
                       attrs = issue.get("attributes", {})
                       slots = attrs.get("slots", {})
                       exploit_details = slots.get("exploit_details") or {}
                       maturity_levels = exploit_details.get("maturity_levels") or []
+                      # also check top-level exploit field in attributes
+                      top_exploit = attrs.get("exploit") or ""
+
+                      print(f"  [API]   issue slots keys: {list(slots.keys())}")
+                      print(f"  [API]   exploit_details: {exploit_details}")
+                      print(f"  [API]   top_exploit: {top_exploit}")
 
                       for m in maturity_levels:
                           level = str(m.get("level") or "").strip().lower().replace(" ", "-")
                           if MATURITY_RANK.get(level, 0) > MATURITY_RANK.get(best, 0):
                               best = level
 
+                  print(f"  [API] Best maturity for {package_name}@{package_version}: {best}")
                   return best
               except Exception as e:
                   print(f"  [API] Error fetching maturity for {package_name}@{package_version}: {e}")
