@@ -206,6 +206,7 @@ jobs:
                   encoded_purl = urllib.parse.quote(purl, safe="")
                   url = f"https://api.snyk.io/rest/orgs/{org_id}/packages/{encoded_purl}/issues?version=2024-06-26&limit=100"
 
+                  print(f"  [API] Calling: {url}")
                   req = urllib.request.Request(url, headers={
                       "Authorization": f"token {snyk_token}",
                       "Content-Type": "application/json"
@@ -290,10 +291,13 @@ jobs:
 
               # ── Step 4: Snyk REST API fallback for Python ────────────────────────
               if mapped in ("no-known-exploit", "not-defined") and snyk_token:
-                  pkg_name    = str(v.get("packageName") or v.get("name") or "").lower()
+                  # Normalise package name: PyYAML → pyyaml, Pillow → pillow etc.
+                  pkg_name    = str(v.get("packageName") or v.get("name") or "").lower().replace("_", "-")
                   pkg_version = str(v.get("version") or "")
                   pkg_manager = str(v.get("packageManager") or "pip").lower()
+                  # For pypi, use the module name not display name
                   cache_key   = f"{pkg_manager}:{pkg_name}:{pkg_version}"
+                  print(f"  [CACHE] Looking up: {cache_key}")
 
                   if cache_key not in _api_cache:
                       # Get org ID once and cache it
