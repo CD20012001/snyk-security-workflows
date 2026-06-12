@@ -42,14 +42,14 @@ jobs:
 
       - name: Apply Filter
         run: |
-         cat > /tmp/high-poc.yml << 'FILTER'
-         version: 1
-         filter:
-          - severity:
-            - high
-            - critical
-         exploit:
-          - Mature
-          - Proof of Concept
-           FILTER
-           snyk-filter -i opensource-results.json -f /tmp/high-poc.yml
+         VULN_COUNT=$(cat opensource-results.json | jq '
+          [.vulnerabilities[] | select(
+           (.severity == "high" or .severity == "critical") and
+           (.exploit == "Proof of Concept" or .exploit == "Mature")
+          )] | length
+         ')
+         echo "Matching vulnerabilities: $VULN_COUNT"
+         if [ "$VULN_COUNT" -gt 0 ]; then
+          echo "Build failed: $VULN_COUNT high/critical exploitable vulnerabilities found"
+          exit 1
+         fi
