@@ -161,6 +161,12 @@ jobs:
                   print(f"  metadata      : {v.get('metadata')}")
                   # print ALL top-level keys so nothing is hidden
                   print(f"  ALL KEYS      : {list(v.keys())}")
+                  # Show what our filter actually computes
+                  exploit_raw = str(v.get("exploit") or "not-defined").strip().lower()
+                  exploit_norm = exploit_raw.replace(" ", "-")
+                  print(f"  → computed maturity (normalised): '{exploit_norm}'")
+                  PUBLIC = {"proof-of-concept","poc","mature","functional"}
+                  print(f"  → in PUBLIC set?: {exploit_norm in PUBLIC}")
           DEBUGEOF
 
       # ── 5. Custom filter: severity + exploit maturity ────────────────────────
@@ -219,17 +225,25 @@ jobs:
               # Fall back to "exploit" field — but map CVSS scores to maturity
               exploit_raw = str(v.get("exploit") or "not-defined").strip().lower()
 
+              # Normalise to lowercase + hyphens before mapping
+              exploit_normalised = exploit_raw.replace(" ", "-")
+
               CVSS_TO_MATURITY = {
-                  "high"              : "mature",
-                  "functional"        : "functional",
-                  "proof-of-concept"  : "proof-of-concept",
-                  "poc"               : "proof-of-concept",
-                  "unproven"          : "no-known-exploit",
-                  "not defined"       : "no-known-exploit",
-                  "not-defined"       : "no-known-exploit",
-                  "no-known-exploit"  : "no-known-exploit",
+                  # Java CVSS exploit scores
+                  "high"                  : "mature",
+                  "functional"            : "functional",
+                  "unproven"              : "no-known-exploit",
+                  "not-defined"           : "no-known-exploit",
+                  "not defined"           : "no-known-exploit",
+                  "no-known-exploit"      : "no-known-exploit",
+                  # Node.js maturity strings (already correct, pass through)
+                  "proof-of-concept"      : "proof-of-concept",
+                  "poc"                   : "proof-of-concept",
+                  "mature"                : "mature",
+                  # "Proof of Concept" with spaces (Node.js variant)
+                  "proof-of-concept"      : "proof-of-concept",
               }
-              return CVSS_TO_MATURITY.get(exploit_raw, exploit_raw)
+              return CVSS_TO_MATURITY.get(exploit_normalised, exploit_normalised)
 
           try:
               with open(results_file) as f:
