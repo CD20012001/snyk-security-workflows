@@ -69,11 +69,17 @@ jobs:
           # ── Python ───────────────────────────────────────────────────────────
           elif [ -f requirements.txt ] || [ -f Pipfile ] || [ -f pyproject.toml ]; then
             echo "✅ Detected: Python"
-            sudo apt-get install -y python3-pip
-            if   [ -f requirements.txt ]; then pip install -r requirements.txt
-            elif [ -f Pipfile ];          then pip install pipenv && pipenv install
-            elif [ -f pyproject.toml ];   then pip install .
+            sudo apt-get install -y python3-pip python3-dev
+            pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt --no-deps || pip install -r requirements.txt
+            elif [ -f Pipfile ]; then
+              pip install pipenv && pipenv install --system --deploy
+            elif [ -f pyproject.toml ]; then
+              pip install .
             fi
+            # Snyk Python scanning requires pip list to be resolvable
+            pip install snyk || true
 
           # ── Java (Maven) ─────────────────────────────────────────────────────
           elif [ -f pom.xml ]; then
@@ -130,6 +136,7 @@ jobs:
             --detection-depth=6 \
             --json-file-output=snyk-results.json \
             --severity-threshold=low \
+            --command=python3 \
           || true   # always continue – filtering is done in the next step
 
       # ── 5. Debug – print raw JSON structure (remove after debugging) ───────────
