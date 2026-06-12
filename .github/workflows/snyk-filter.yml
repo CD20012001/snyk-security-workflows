@@ -39,9 +39,13 @@ jobs:
           FILTERED=$(cat opensource-results.json | jq -c '
             [.vulnerabilities[] | select(
               (.severity == "high" or .severity == "critical") and
-              ((.exploit | ascii_downcase | gsub("-"; " ")) == "proof of concept" 
-              or 
-              (.exploit | ascii_downcase | gsub("-"; " ")) == "mature")
+               (
+  
+                ((.exploit // .exploitMaturity) | ascii_downcase | gsub("-"; " ")) == "proof of concept"
+                or
+                ((.exploit // .exploitMaturity) | ascii_downcase | gsub("-"; " ")) == "mature"
+              )
+
             )] 
           ')
 
