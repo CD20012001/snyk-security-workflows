@@ -33,7 +33,11 @@ jobs:
         with:
           name: snyk-results
           path: opensource-results.json
-
+          
+      - name: Debug Exploit Field
+        run: |
+         cat opensource-results.json | jq '.vulnerabilities[0]'
+         
       - name: Apply Filter
         run: |
           FILTERED=$(cat opensource-results.json | jq -c '
