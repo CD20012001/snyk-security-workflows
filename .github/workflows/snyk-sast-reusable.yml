@@ -202,59 +202,55 @@ jobs:
 
           def extract_maturity(v):
               """
-              Snyk uses different fields per ecosystem:
+              Snyk stores exploit maturity in different places per ecosystem:
 
-              Node.js  -> "exploit" field returns maturity string:
-                          "proof-of-concept", "mature", "no-known-exploit"
+              Node.js   -> top-level "exploit" field
+                           e.g. "Proof of Concept", "Mature", "No Known Exploit"
 
-              Java/Maven -> "exploit" field returns CVSS exploit score string:
-                            "High", "Not Defined", "Unproven" etc.
-                            Real maturity is in "exploitDetails" dict or
-                            we map the CVSS exploit score to maturity ourselves.
+              Java/Maven -> top-level "exploit" field with CVSS score
+                           e.g. "High", "Not Defined", "Unproven"
 
-              CVSS exploit score mapping:
-                "High"        -> treat as "mature"        (weaponised / widely exploited)
-                "Functional"  -> treat as "functional"    (working exploit exists)
-                "Proof-of-Concept" -> treat as "poc"      (POC exists)
-                "Unproven"    -> treat as "no-known-exploit"
-                "Not Defined" -> treat as "no-known-exploit"
+              Python    -> "exploitDetails.maturityLevels" list
+                           e.g. [{"type": "primary", "level": "Mature", "format": "CVSSv3"},
+                                  {"type": "secondary", "level": "Not Defined", "format": "CVSSv4"}]
+                           We read the "primary" entry's "level" field.
               """
-              # Check exploitDetails first (most accurate for Java)
+
+              # ── Step 1: Check exploitDetails.maturityLevels (Python / newer Snyk) ──
               exploit_details = v.get("exploitDetails") or {}
               if isinstance(exploit_details, dict):
-                  maturity_from_details = (
-                      exploit_details.get("exploitMaturity")
-                      or exploit_details.get("maturity")
-                      or exploit_details.get("exploit")
-                  )
-                  if maturity_from_details:
-                      return str(maturity_from_details).strip().lower().replace(" ", "-")
+                  maturity_levels = exploit_details.get("maturityLevels") or []
+                  if isinstance(maturity_levels, list) and maturity_levels:
+                      # Prefer "primary" type, fall back to first entry
+                      primary = next(
+                          (m for m in maturity_levels if str(m.get("type","")).lower() == "primary"),
+                          maturity_levels[0]
+                      )
+                      level = str(primary.get("level") or "").strip()
+                      if level and level.lower() not in ("", "not defined", "not-defined"):
+                          return level.lower().replace(" ", "-")
 
-              # Check exploitMaturity top-level (some Snyk versions)
-              exploit_maturity = v.get("exploitMaturity")
+              # ── Step 2: Check top-level exploitMaturity (some Snyk versions) ────────
+              exploit_maturity = v.get("exploitMaturity") or ""
               if exploit_maturity:
                   return str(exploit_maturity).strip().lower().replace(" ", "-")
 
-              # Fall back to "exploit" field — but map CVSS scores to maturity
+              # ── Step 3: Map top-level "exploit" field ────────────────────────────────
+              # Node.js returns maturity strings; Java returns CVSS exploit scores
               exploit_raw = str(v.get("exploit") or "not-defined").strip().lower()
-
-              # Normalise to lowercase + hyphens before mapping
               exploit_normalised = exploit_raw.replace(" ", "-")
 
               CVSS_TO_MATURITY = {
-                  # Java CVSS exploit scores
-                  "high"                  : "mature",
-                  "functional"            : "functional",
-                  "unproven"              : "no-known-exploit",
-                  "not-defined"           : "no-known-exploit",
-                  "not defined"           : "no-known-exploit",
-                  "no-known-exploit"      : "no-known-exploit",
-                  # Node.js maturity strings (already correct, pass through)
-                  "proof-of-concept"      : "proof-of-concept",
-                  "poc"                   : "proof-of-concept",
-                  "mature"                : "mature",
-                  # "Proof of Concept" with spaces (Node.js variant)
-                  "proof-of-concept"      : "proof-of-concept",
+                  # Node.js maturity strings (pass through as-is)
+                  "proof-of-concept"  : "proof-of-concept",
+                  "poc"               : "proof-of-concept",
+                  "mature"            : "mature",
+                  "functional"        : "functional",
+                  "no-known-exploit"  : "no-known-exploit",
+                  # Java CVSS exploit score strings → map to maturity
+                  "high"              : "mature",
+                  "unproven"          : "no-known-exploit",
+                  "not-defined"       : "no-known-exploit",
               }
               return CVSS_TO_MATURITY.get(exploit_normalised, exploit_normalised)
 
