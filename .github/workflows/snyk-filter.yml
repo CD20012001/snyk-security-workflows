@@ -1,5 +1,4 @@
 name: Snyk Filter Reusable
-
 on:
   workflow_call:
     inputs:
@@ -23,9 +22,6 @@ jobs:
       - name: Install Snyk
         run: npm install -g snyk
 
-      - name: Install Snyk Filter
-        run: npm install -g snyk-filter
-
       - name: Authenticate Snyk
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
@@ -42,14 +38,26 @@ jobs:
 
       - name: Apply Filter
         run: |
-         VULN_COUNT=$(cat opensource-results.json | jq '
-          [.vulnerabilities[] | select(
-           (.severity == "high" or .severity == "critical") and
-           (.exploit == "Proof of Concept" or .exploit == "Mature")
-          )] | length
-         ')
-         echo "Matching vulnerabilities: $VULN_COUNT"
-         if [ "$VULN_COUNT" -gt 0 ]; then
-          echo "Build failed: $VULN_COUNT high/critical exploitable vulnerabilities found"
-          exit 1
-         fi
+          cat opensource-results.json | jq -r '
+            [.vulnerabilities[] | select(
+              (.severity == "high" or .severity == "critical") and
+              (.exploit == "Proof of Concept" or .exploit == "Mature")
+            )]
+            | unique_by(.id)
+            | . as $vulns
+            | "Found \(length) high/critical exploitable vulnerabilities:\n",
+              (.[] | "  [\(.severity | ascii_upcase)] \(.title) — exploit: \(.exploit)")
+          '
+
+          VULN_COUNT=$(cat opensource-results.json | jq '
+            [.vulnerabilities[] | select(
+              (.severity == "high" or .severity == "critical") and
+              (.exploit == "Proof of Concept" or .exploit == "Mature")
+            )] | unique_by(.id) | length
+          ')
+
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            echo ""
+            echo "Build failed: $VULN_COUNT unique high/critical exploitable vulnerabilities found"
+            exit 1
+          fi
