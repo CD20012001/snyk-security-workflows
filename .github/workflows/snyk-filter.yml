@@ -39,7 +39,7 @@ jobs:
           FILTERED=$(cat opensource-results.json | jq -c '
             [.vulnerabilities[] | select(
               (.severity == "high" or .severity == "critical") and
-              (.exploit == "Proof of Concept" or .exploit == "Mature")
+              (.exploit == "Proof of Concept" or .exploit == "Mature" or .exploit == "mature")
             )] 
           ')
 
