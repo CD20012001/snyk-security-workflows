@@ -1,0 +1,49 @@
+name: Snyk Filter Reusable
+
+on:
+  workflow_call:
+    inputs:
+      install-command:
+        description: "Command to install dependencies"
+        required: true
+        type: string
+      filter-file:
+        description: "Filter rules file path"
+        required: false
+        type: string
+        default: ".snyk-filter/high-poc.yml"
+    secrets:
+      SNYK_TOKEN:
+        required: true
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Install Snyk
+        run: npm install -g snyk
+
+      - name: Install Snyk Filter
+        run: npm install -g snyk-filter
+
+      - name: Authenticate Snyk
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+
+      - name: Run Snyk Scan
+        run: snyk test --json > opensource-results.json || true
+
+      - name: Show Exploit Values
+        run: |
+          cat opensource-results.json | jq '.vulnerabilities[] | {
+            title,
+            severity,
+            exploit
+          }'
+
+      - name: Apply Filter
+        run: snyk-filter -i opensource-results.json -f ${{ inputs.filter-file }}
