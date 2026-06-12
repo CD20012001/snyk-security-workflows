@@ -30,11 +30,14 @@ jobs:
 
       - name: Show Exploit Values
         run: |
-          cat opensource-results.json | jq '.vulnerabilities[] | {
-            title,
-            severity,
-            exploit
-          }'
+         cat opensource-results.json | jq -r '
+          [.vulnerabilities[] | select(
+           (.severity == "high" or .severity == "critical") and
+           (.exploit == "Proof of Concept" or .exploit == "Mature")
+          )]
+          | unique_by(.id)
+          | .[] | "[\(.severity | ascii_upcase)] \(.title) — exploit: \(.exploit)"
+         '
 
       - name: Apply Filter
         run: |
