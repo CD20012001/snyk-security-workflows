@@ -42,7 +42,7 @@ jobs:
 
       - name: Apply Filter
         run: |
-          cat << 'FILTER' > /tmp/high-poc.yml
+          cat > /tmp/high-poc.yml << 'FILTER'
           version: 2
           customFilters:
             filter: >
