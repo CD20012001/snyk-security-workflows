@@ -40,7 +40,7 @@ jobs:
             [.vulnerabilities[] | select(
               (.severity == "high" or .severity == "critical") and
               (.exploit == "Proof of Concept" or .exploit == "Mature")
-            )] | 
+            )] 
           ')
 
           COUNT=$(echo "$FILTERED" | jq 'length')
