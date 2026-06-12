@@ -28,39 +28,43 @@ jobs:
       - name: Run Snyk Scan
         run: snyk test --json > opensource-results.json || true
 
-      - name: Show Exploit Values
-        run: |
-         cat opensource-results.json | jq -r '
-          [.vulnerabilities[] | select(
-           (.severity == "high" or .severity == "critical") and
-           (.exploit == "Proof of Concept" or .exploit == "Mature")
-          )]
-          | unique_by(.id)
-          | .[] | "[\(.severity | ascii_upcase)] \(.title) — exploit: \(.exploit)"
-         '
+      - name: Upload Snyk Results Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-results
+          path: opensource-results.json
 
       - name: Apply Filter
         run: |
-          cat opensource-results.json | jq -r '
+          FILTERED=$(cat opensource-results.json | jq -c '
             [.vulnerabilities[] | select(
               (.severity == "high" or .severity == "critical") and
               (.exploit == "Proof of Concept" or .exploit == "Mature")
-            )]
-            | unique_by(.id)
-            | . as $vulns
-            | "Found \(length) high/critical exploitable vulnerabilities:\n",
-              (.[] | "  [\(.severity | ascii_upcase)] \(.title) — exploit: \(.exploit)")
-          '
-
-          VULN_COUNT=$(cat opensource-results.json | jq '
-            [.vulnerabilities[] | select(
-              (.severity == "high" or .severity == "critical") and
-              (.exploit == "Proof of Concept" or .exploit == "Mature")
-            )] | unique_by(.id) | length
+            )] | unique_by(.id)
           ')
 
-          if [ "$VULN_COUNT" -gt 0 ]; then
-            echo ""
-            echo "Build failed: $VULN_COUNT unique high/critical exploitable vulnerabilities found"
-            exit 1
+          COUNT=$(echo "$FILTERED" | jq 'length')
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No high/critical exploitable vulnerabilities found. Build passed."
+            exit 0
           fi
+
+          echo "Build failed - vulnerabilities meeting filter criteria:"
+          echo "================================================================"
+          echo ""
+
+          echo "$FILTERED" | jq -r '.[] |
+            "[\(.severity | ascii_upcase)] \(.identifiers.CVE[0] // .id) - \(.title)",
+            "  Package : \(.packageName):\(.name) @ \(.version)",
+            "  Exploit : \(.exploit)",
+            "  Path    : \(.from | join(" > "))",
+            ""
+          '
+
+          echo "================================================================"
+          echo "Build-breaking vulns : $COUNT"
+          echo "================================================================"
+          echo ""
+          echo "Error: Build failed - vulnerabilities meeting filter criteria:"
+          exit 1
