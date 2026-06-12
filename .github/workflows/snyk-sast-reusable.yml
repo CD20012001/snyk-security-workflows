@@ -344,6 +344,10 @@ jobs:
                   severity_match = severity in severity_filter
                   exploit_match  = (not fail_on_exploit) or (maturity in PUBLIC_EXPLOIT_MATURITIES)
 
+                  # Debug: print every high/critical vuln and its resolved maturity
+                  if severity in ("critical", "high"):
+                      print(f"  [FILTER] {v.get('id')} | sev={severity} | maturity={maturity} | exploit_match={exploit_match}")
+
                   if severity_match and exploit_match:
                       matched.append(all_vulns[-1])
 
