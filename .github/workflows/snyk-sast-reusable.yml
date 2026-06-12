@@ -132,6 +132,37 @@ jobs:
             --severity-threshold=low \
           || true   # always continue – filtering is done in the next step
 
+      # ── 5. Debug – print raw JSON structure (remove after debugging) ───────────
+      - name: Debug – print raw Snyk JSON fields
+        if: always()
+        run: |
+          python3 - <<'DEBUGEOF'
+          import json, sys
+
+          try:
+              with open("snyk-results.json") as f:
+                  raw = json.load(f)
+          except Exception as e:
+              print(f"Could not read snyk-results.json: {e}")
+              sys.exit(0)
+
+          projects = raw if isinstance(raw, list) else [raw]
+          print(f"\n=== DEBUG: Snyk JSON Structure ===")
+          print(f"Total projects: {len(projects)}")
+          for i, project in enumerate(projects):
+              vulns = project.get("vulnerabilities", [])
+              print(f"\nProject {i+1}: {len(vulns)} vulnerabilities")
+              for v in vulns[:5]:  # print first 5 only
+                  print(f"  ---")
+                  print(f"  id            : {v.get('id')}")
+                  print(f"  severity      : {v.get('severity')}")
+                  print(f"  exploit       : {v.get('exploit')}")
+                  print(f"  exploitMaturity: {v.get('exploitMaturity')}")
+                  print(f"  metadata      : {v.get('metadata')}")
+                  # print ALL top-level keys so nothing is hidden
+                  print(f"  ALL KEYS      : {list(v.keys())}")
+          DEBUGEOF
+
       # ── 5. Custom filter: severity + exploit maturity ────────────────────────
       - name: Apply Snyk filter (severity + exploit maturity)
         id: snyk-filter
