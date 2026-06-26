@@ -4,9 +4,20 @@ on:
   workflow_call:
     inputs:
       install-command:
-        description: "Command to install dependencies"
-        required: true
+        description: "Command to install dependencies (needed for Maven/pip and lockfile-less npm/yarn). Leave empty if a lockfile is committed."
+        required: false
         type: string
+        default: ""
+      severity-filter:
+        description: "Comma-separated severities that break the build, e.g. 'critical,high'"
+        required: false
+        type: string
+        default: "critical,high"
+      fail-on-exploit:
+        description: "If true, only fail on issues that also have a real exploit (PoC/Functional/Mature/High/Attacked). If false, fail on any issue at the chosen severities."
+        required: false
+        type: boolean
+        default: true
     secrets:
       SNYK_TOKEN:
         required: true
@@ -18,7 +29,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Dependencies
+        if: ${{ inputs.install-command != '' }}
         run: ${{ inputs.install-command }}
+
+      - name: Warn if no install-command
+        if: ${{ inputs.install-command == '' }}
+        run: |
+          echo "::warning::No install-command provided. Maven, pip, and lockfile-less npm/yarn projects may under-report dependencies (Snyk resolves the full tree from the built/installed project)."
 
       - name: Install Snyk
         run: npm install -g snyk
@@ -41,31 +58,41 @@ jobs:
 
       - name: Apply Filter
         run: |
+          SEVERITIES="${{ inputs.severity-filter }}"
+          FAIL_ON_EXPLOIT="${{ inputs.fail-on-exploit }}"
+          echo "Filtering on severities: [$SEVERITIES] | fail-on-exploit: $FAIL_ON_EXPLOIT"
+
           # exnorm folds every exploit-maturity spelling into one canonical token so the
           # same rule works across languages. The field uses different vocabularies per
           # ecosystem: Snyk (Mature / Proof of Concept / No Known Exploit / No Data),
           # CVSS v3 (High / Functional / Proof of Concept / Unproven / Not Defined),
-          # CVSS v4 (Attacked / ...). Build-breaking set = anything PoC-level or worse.
-          FILTERED=$(cat opensource-results.json | jq -c '
+          # CVSS v4 (Attacked / ...). When fail-on-exploit is true, the build breaks only
+          # on PoC-level-or-worse; when false, it breaks on any issue at the given severities.
+          FILTERED=$(cat opensource-results.json | jq -c \
+            --arg sevs "$SEVERITIES" \
+            --argjson failOnExploit "$FAIL_ON_EXPLOIT" '
             def exnorm: (. // "")
               | ascii_downcase
               | gsub("[-_]"; " ")
               | gsub("  +"; " ")
               | gsub("^ +| +$"; "");
-            [.vulnerabilities[]
-              | select(
-                  (.type != "license")
-                  and (((.severity // "") | ascii_downcase) | (. == "high" or . == "critical"))
-                  and ( ((.exploit // .exploitMaturity) | exnorm) as $e
-                        | ($e == "mature" or $e == "high" or $e == "attacked"
-                           or $e == "functional" or $e == "proof of concept") )
-                )]
+            ($sevs | ascii_downcase | split(",") | map(gsub("^ +| +$"; ""))) as $sevset
+            | [.vulnerabilities[]
+                | select(
+                    (.type != "license")
+                    and ( ((.severity // "") | ascii_downcase) as $s | ($sevset | index($s)) != null )
+                    and ( if $failOnExploit
+                            then ( ((.exploit // .exploitMaturity) | exnorm) as $e
+                                   | ($e == "mature" or $e == "high" or $e == "attacked"
+                                      or $e == "functional" or $e == "proof of concept") )
+                            else true end )
+                  )]
           ')
 
           COUNT=$(echo "$FILTERED" | jq 'length')
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "No high/critical exploitable vulnerabilities found. Build passed."
+            echo "No matching vulnerabilities found. Build passed."
             exit 0
           fi
 
