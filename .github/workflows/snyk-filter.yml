@@ -14,7 +14,7 @@ on:
         type: string
         default: "critical,high"
       fail-on-exploit:
-        description: "If true, only fail on issues that also have a real exploit (PoC/Functional/Mature/High/Attacked). If false, fail on any issue at the chosen severities."
+        description: "If true, only fail on issues that also have a real exploit (PoC/Functional/High/Attacked). If false, fail on any issue at the chosen severities."
         required: false
         type: boolean
         default: true
@@ -35,7 +35,7 @@ jobs:
       - name: Warn if no install-command
         if: ${{ inputs.install-command == '' }}
         run: |
-          echo "::warning::No install-command provided. Maven, pip, and lockfile-less npm/yarn projects may under-report dependencies (Snyk resolves the full tree from the built/installed project)."
+          echo "::warning::No install-command provided. Maven, pip, and lockfile-less npm/yarn projects may under-report dependencies."
 
       - name: Install Snyk
         run: npm install -g snyk
@@ -52,22 +52,12 @@ jobs:
           name: snyk-results
           path: opensource-results.json
 
-      - name: Debug Exploit Field
-        run: |
-          cat opensource-results.json | jq '.vulnerabilities[0]'
-
       - name: Apply Filter
         run: |
           SEVERITIES="${{ inputs.severity-filter }}"
           FAIL_ON_EXPLOIT="${{ inputs.fail-on-exploit }}"
           echo "Filtering on severities: [$SEVERITIES] | fail-on-exploit: $FAIL_ON_EXPLOIT"
 
-          # exnorm folds every exploit-maturity spelling into one canonical token so the
-          # same rule works across languages. The field uses different vocabularies per
-          # ecosystem: Snyk (Mature / Proof of Concept / No Known Exploit / No Data),
-          # CVSS v3 (High / Functional / Proof of Concept / Unproven / Not Defined),
-          # CVSS v4 (Attacked / ...). When fail-on-exploit is true, the build breaks only
-          # on PoC-level-or-worse; when false, it breaks on any issue at the given severities.
           FILTERED=$(cat opensource-results.json | jq -c \
             --arg sevs "$SEVERITIES" \
             --argjson failOnExploit "$FAIL_ON_EXPLOIT" '
@@ -82,8 +72,8 @@ jobs:
                     (.type != "license")
                     and ( ((.severity // "") | ascii_downcase) as $s | ($sevset | index($s)) != null )
                     and ( if $failOnExploit
-                            then ( ((.exploit // .exploitMaturity) | exnorm) as $e
-                                   | ($e == "mature" or $e == "high" or $e == "attacked"
+                            then ( ((.exploit // "") | exnorm) as $e
+                                   | ($e == "high" or $e == "attacked"
                                       or $e == "functional" or $e == "proof of concept") )
                             else true end )
                   )]
@@ -102,7 +92,7 @@ jobs:
           echo "$FILTERED" | jq -r '.[] |
             "[\(.severity | ascii_upcase)] \(.identifiers.CVE[0] // .id) - \(.title)",
             "    Package : \(.packageName) @ \(.version)",
-            "    Exploit : \(.exploit // .exploitMaturity)",
+            "    Exploit : \(.exploit // "Not Defined")",
             "    Path    : \(.from | join(" > "))",
             ""
           '
