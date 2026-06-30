@@ -77,6 +77,7 @@ jobs:
                                       or $e == "functional" or $e == "proof of concept") )
                             else true end )
                   )]
+            | unique_by(.id)
           ')
 
           COUNT=$(echo "$FILTERED" | jq 'length')
